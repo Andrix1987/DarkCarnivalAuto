@@ -211,7 +211,7 @@ DEFAULT_DELAY = 5.0
 # ignores stray specks / hero-art bleeding into the badge box.
 DIGIT_MIN_AREA   = 6
 DIGIT_MIN_HEIGHT = 7
-BADGE_BOX = (-14, -12, 15, 11)   # dx1,dy1,dx2,dy2 around (cx, cy+BADGE_DY)
+BADGE_BOX = (-20, -12, 24, 11)   # dx1,dy1,dx2,dy2 around (cx, cy+BADGE_DY) -- wide enough for TWO-digit counts (>=10)
 LEARNED_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "learned_digits.json")
 

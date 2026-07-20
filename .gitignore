@@ -1,0 +1,13 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# runtime byproducts / debug captures / logs
+*.log
+picker_log.txt
+test_log.txt
+*_capture.png
+tickets_capture.png
+
+# installers / large binaries
+*.exe

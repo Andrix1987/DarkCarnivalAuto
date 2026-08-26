@@ -152,7 +152,7 @@ POPUP_SCALES = (0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15)
 # End-game -> back-to-event navigation (after hero select).
 CONTINUE_BTN     = (957, 908)                # "CONTINUE / PRODOLZHIT" on the end screen
 DOTA_LOGO        = (285, 30)                 # Dota logo top-left (back to dashboard)
-BTN_OPEN_EVENT   = (952, 926)                # "OPEN EVENT" on the dashboard
+BTN_OPEN_EVENT   = (1720, 320)                # "OPEN EVENT" on the dashboard
 POSTGAME_WAIT    = 300                       # wait this long after hero-select before checking
 ENDGAME_STRIP    = (300, 1010, 1620, 1055)   # bottom strip that turns black at match end
 ENDGAME_DARK_MAX = 35                        # strip mean brightness below this => black bar

@@ -88,14 +88,21 @@ def isleep(seconds):
         time.sleep(min(0.25, remaining))
 
 
+def _to_native(x, y):
+    """Map a point from the 1920x1080 working space to the real screen resolution."""
+    return (int(round(x * NATIVE_W / SCREEN_W)), int(round(y * NATIVE_H / SCREEN_H)))
+
+
 def move_cursor(x, y):
-    """Move the mouse without clicking (bypasses pyautogui failsafe)."""
+    """Move the mouse (given in 1920x1080 space) without clicking; scaled to the real
+    screen (bypasses pyautogui failsafe)."""
+    nx, ny = _to_native(x, y)
     try:
         import ctypes
-        ctypes.windll.user32.SetCursorPos(int(x), int(y))
+        ctypes.windll.user32.SetCursorPos(int(nx), int(ny))
     except Exception:
         try:
-            pyautogui.moveTo(x, y)
+            pyautogui.moveTo(nx, ny)
         except Exception:
             pass
 
@@ -104,6 +111,10 @@ def move_cursor(x, y):
 # ======================================================================================
 
 SCREEN_W, SCREEN_H = 1920, 1080
+# The whole program works in a 1920x1080 coordinate space. grab_screen() normalises
+# the capture to 1920x1080, and clicks are scaled back to the real resolution -- so it
+# also runs on 1366x768 (and other 16:9 sizes). Updated live in grab_screen().
+NATIVE_W, NATIVE_H = SCREEN_W, SCREEN_H
 
 BTN_PLAY        = (1697, 1035)   # green "PLAY" on the event page
 BTN_SELECT_HERO = (1476, 828)    # "SELECT <HERO>" on the hero grid
@@ -152,7 +163,7 @@ POPUP_SCALES = (0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15)
 # End-game -> back-to-event navigation (after hero select).
 CONTINUE_BTN     = (957, 908)                # "CONTINUE / PRODOLZHIT" on the end screen
 DOTA_LOGO        = (285, 30)                 # Dota logo top-left (back to dashboard)
-BTN_OPEN_EVENT   = (1720, 320)                # "OPEN EVENT" on the dashboard
+BTN_OPEN_EVENT   = (1720, 320)               # click inside the "Dark Carnival" banner (top-right of main menu) -- opens the event
 POSTGAME_WAIT    = 300                       # wait this long after hero-select before checking
 ENDGAME_STRIP    = (300, 1010, 1620, 1055)   # bottom strip that turns black at match end
 ENDGAME_DARK_MAX = 35                        # strip mean brightness below this => black bar
@@ -269,9 +280,16 @@ _TPL = None
 
 
 def grab_screen():
+    """Grab the primary monitor and normalise it to 1920x1080 so every coordinate,
+    region and template works regardless of the real resolution (e.g. 1366x768)."""
+    global NATIVE_W, NATIVE_H
     with mss.mss() as sct:
         img = np.array(sct.grab(sct.monitors[1]))
-    return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    NATIVE_H, NATIVE_W = img.shape[0], img.shape[1]
+    if NATIVE_W != SCREEN_W or NATIVE_H != SCREEN_H:
+        img = cv2.resize(img, (SCREEN_W, SCREEN_H), interpolation=cv2.INTER_CUBIC)
+    return img
 
 
 def save_png(path, img):
@@ -428,8 +446,9 @@ def choose(rows):
 
 
 def click(xy, label=""):
-    print("    click", xy, " ", label)
-    pyautogui.moveTo(xy[0], xy[1], duration=0.25)
+    nx, ny = _to_native(xy[0], xy[1])
+    print("    click", xy, "->", (nx, ny), " ", label)
+    pyautogui.moveTo(nx, ny, duration=0.25)
     pyautogui.click()
 
 
@@ -883,24 +902,34 @@ def report(rows, target):
         print("\n[DECISION] hero = %s (count=%s)" % (target["hero"], target["count"]))
 
 
-def automation_loop(set_status):
-    """Repeat the full cycle until STOP: read tickets -> play -> accept -> pick -> back to event."""
+def automation_loop(set_status, simple_mode=False):
+    """Repeat until STOP. Normal mode: read tickets and pick the leftmost-minimum.
+    Simple mode (for monitors below 1920x1080, where the ticket digits are too small
+    to read reliably): ignore the counts and just cycle through the hero list in order,
+    then start over. Both modes: play -> accept -> pick hero -> back to the event."""
     global _TPL
     _TPL = _build_templates()
+    cycle_i = 0
     while not STOP.is_set():
         try:
-            set_status("\u0427\u0438\u0442\u0430\u044e \u0431\u0438\u043b\u0435\u0442\u044b...")
             img = grab_screen()
             check_error_dialog(img)
             dismiss_popups(img)
-            rows = read_all(img)
-            target = choose(rows)
-            report(rows, target)
-            if target is None:
-                set_status("\u0411\u0438\u043b\u0435\u0442\u044b \u043d\u0435 \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u044b \u2014 \u0436\u0434\u0443 5\u0441")
-                isleep(5)
-                continue
-            set_status("\u0413\u0435\u0440\u043e\u0439: %s \u2014 \u0438\u0433\u0440\u0430\u044e \u043c\u0430\u0442\u0447" % target["hero"])
+            if simple_mode:
+                target = TICKETS[cycle_i % len(TICKETS)]
+                cycle_i += 1
+                print("[simple] hero = %s (cycle %d)" % (target["hero"], cycle_i))
+                set_status("\u0423\u043f\u0440\u043e\u0449\u0451\u043d\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c \u2014 \u0433\u0435\u0440\u043e\u0439: %s" % target["hero"])
+            else:
+                set_status("\u0427\u0438\u0442\u0430\u044e \u0431\u0438\u043b\u0435\u0442\u044b...")
+                rows = read_all(img)
+                target = choose(rows)
+                report(rows, target)
+                if target is None:
+                    set_status("\u0411\u0438\u043b\u0435\u0442\u044b \u043d\u0435 \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u044b \u2014 \u0436\u0434\u0443 5\u0441")
+                    isleep(5)
+                    continue
+                set_status("\u0413\u0435\u0440\u043e\u0439: %s \u2014 \u0438\u0433\u0440\u0430\u044e \u043c\u0430\u0442\u0447" % target["hero"])
             do_clicks(target)
             set_status("\u0426\u0438\u043a\u043b \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043d, \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u0447\u0435\u0440\u0435\u0437 5\u0441")
             isleep(5)
@@ -919,7 +948,7 @@ def launch_gui():
     root = tk.Tk()
     root.title("Dark Carnival Auto")
     root.configure(bg=BG)
-    root.geometry("460x250")
+    root.geometry("460x340")
     root.resizable(False, False)
 
     tk.Label(root, text="Dark Carnival Auto", font=("Segoe UI Semibold", 18),
@@ -935,6 +964,15 @@ def launch_gui():
                     relief="flat", cursor="hand2")
     btn.pack(pady=6)
 
+    simple_var = tk.BooleanVar(value=False)
+    chk = tk.Checkbutton(root, text="\u0423\u043f\u0440\u043e\u0449\u0451\u043d\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c", variable=simple_var,
+                         font=("Segoe UI", 10), fg=TXT, bg=BG, activebackground=BG,
+                         activeforeground=TXT, selectcolor=BG, bd=0, highlightthickness=0,
+                         cursor="hand2")
+    chk.pack(pady=(12, 0))
+    tk.Label(root, text="\u0414\u043b\u044f \u043c\u043e\u043d\u0438\u0442\u043e\u0440\u043e\u0432 \u0441 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0438\u0435\u043c \u043d\u0438\u0436\u0435 1920x1080: \u0432\u044b\u0431\u0438\u0440\u0430\u0435\u0442 \u0433\u0435\u0440\u043e\u0435\u0432 \u043f\u043e \u0441\u043f\u0438\u0441\u043a\u0443 \u043f\u043e \u043a\u0440\u0443\u0433\u0443, \u0431\u0435\u0437 \u0447\u0442\u0435\u043d\u0438\u044f \u0431\u0438\u043b\u0435\u0442\u043e\u0432.", wraplength=420, justify="center",
+             font=("Segoe UI", 8), fg=SUB, bg=BG).pack(pady=(0, 4), padx=18)
+
     state = dict(thread=None)
 
     def set_status(msg):
@@ -945,6 +983,10 @@ def launch_gui():
 
     def reset_btn():
         btn.config(text="\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c", bg=GREEN, activebackground=GREEN_A)
+        try:
+            chk.config(state="normal")
+        except Exception:
+            pass
         state["thread"] = None
 
     def worker():
@@ -954,7 +996,7 @@ def launch_gui():
             set_status("\u0421\u0442\u0430\u0440\u0442 \u0447\u0435\u0440\u0435\u0437 %d  \u2014  \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438\u0441\u044c \u043d\u0430 \u0441\u043e\u0431\u044b\u0442\u0438\u0435 Dota" % i)
             time.sleep(1)
         try:
-            automation_loop(set_status)
+            automation_loop(set_status, simple_mode=simple_var.get())
         except _Stopped:
             set_status("\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043e.")
         except Exception as e:
@@ -967,6 +1009,10 @@ def launch_gui():
         if state["thread"] is None:
             STOP.clear()
             btn.config(text="\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c", bg=RED, activebackground=RED_A)
+            try:
+                chk.config(state="disabled")
+            except Exception:
+                pass
             t = threading.Thread(target=worker, daemon=True)
             state["thread"] = t
             t.start()
@@ -1004,9 +1050,9 @@ def main():
 
     countdown_to_capture(args.delay)
     img = grab_screen()
-    print("[i] Captured %dx%d." % (img.shape[1], img.shape[0]))
-    if img.shape[1] != SCREEN_W or img.shape[0] != SCREEN_H:
-        print("[i] Resolution != %dx%d -> coordinates likely need adjusting." % (SCREEN_W, SCREEN_H))
+    print("[i] Captured %dx%d (native %dx%d)." % (img.shape[1], img.shape[0], NATIVE_W, NATIVE_H))
+    if (NATIVE_W, NATIVE_H) != (SCREEN_W, SCREEN_H):
+        print("[i] Native %dx%d -> normalised to %dx%d, clicks scaled back." % (NATIVE_W, NATIVE_H, SCREEN_W, SCREEN_H))
 
     if args.calibrate:
         out = _misc_path("calibration.png")

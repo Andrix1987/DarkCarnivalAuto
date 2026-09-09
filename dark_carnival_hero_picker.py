@@ -42,6 +42,18 @@ class _Tee:
 
 _IMPORT_ERROR = None
 try:
+    # Make the process DPI-aware BEFORE importing pyautogui/mss, so screen capture and
+    # mouse clicks share ONE physical-pixel coordinate space. On displays where Windows
+    # scaling is not 100% this is what stops the clicks from missing the buttons
+    # (works on one PC but misses on another == a DPI mismatch).
+    try:
+        import ctypes as _dpi
+        try:
+            _dpi.windll.shcore.SetProcessDpiAwareness(2)   # PER-MONITOR aware (Win 8.1+)
+        except Exception:
+            _dpi.windll.user32.SetProcessDPIAware()        # system DPI aware (fallback)
+    except Exception:
+        pass
     import numpy as np
     import cv2
     import mss
@@ -91,6 +103,17 @@ def isleep(seconds):
 def _to_native(x, y):
     """Map a point from the 1920x1080 working space to the real screen resolution."""
     return (int(round(x * NATIVE_W / SCREEN_W)), int(round(y * NATIVE_H / SCREEN_H)))
+
+
+def apply_resolution(res_str):
+    """Set the screen resolution used for click scaling (from the GUI selector, e.g.
+    "1366x768"). Default/fallback is 1920x1080 (no scaling)."""
+    global NATIVE_W, NATIVE_H
+    try:
+        w, h = res_str.lower().replace(" ", "").split("x")
+        NATIVE_W, NATIVE_H = int(w), int(h)
+    except Exception:
+        NATIVE_W, NATIVE_H = SCREEN_W, SCREEN_H
 
 
 def move_cursor(x, y):
@@ -163,7 +186,7 @@ POPUP_SCALES = (0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15)
 # End-game -> back-to-event navigation (after hero select).
 CONTINUE_BTN     = (957, 908)                # "CONTINUE / PRODOLZHIT" on the end screen
 DOTA_LOGO        = (285, 30)                 # Dota logo top-left (back to dashboard)
-BTN_OPEN_EVENT   = (952, 926)               # click inside the "Dark Carnival" banner (top-right of main menu) -- opens the event
+BTN_OPEN_EVENT   = (952, 926)                # "OPEN EVENT" button on the event dashboard (Valve moved it back to the old spot)
 POSTGAME_WAIT    = 300                       # wait this long after hero-select before checking
 ENDGAME_STRIP    = (300, 1010, 1620, 1055)   # bottom strip that turns black at match end
 ENDGAME_DARK_MAX = 35                        # strip mean brightness below this => black bar
@@ -280,14 +303,13 @@ _TPL = None
 
 
 def grab_screen():
-    """Grab the primary monitor and normalise it to 1920x1080 so every coordinate,
-    region and template works regardless of the real resolution (e.g. 1366x768)."""
-    global NATIVE_W, NATIVE_H
+    """Grab the primary monitor and normalise it to 1920x1080 so every region and
+    template works. Click coordinates are scaled to NATIVE_W/NATIVE_H, which the user
+    picks in the resolution selector (default 1920x1080) -- no auto-scaling guesswork."""
     with mss.mss() as sct:
         img = np.array(sct.grab(sct.monitors[1]))
     img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-    NATIVE_H, NATIVE_W = img.shape[0], img.shape[1]
-    if NATIVE_W != SCREEN_W or NATIVE_H != SCREEN_H:
+    if img.shape[1] != SCREEN_W or img.shape[0] != SCREEN_H:
         img = cv2.resize(img, (SCREEN_W, SCREEN_H), interpolation=cv2.INTER_CUBIC)
     return img
 
@@ -948,7 +970,7 @@ def launch_gui():
     root = tk.Tk()
     root.title("Dark Carnival Auto")
     root.configure(bg=BG)
-    root.geometry("460x340")
+    root.geometry("460x430")
     root.resizable(False, False)
 
     tk.Label(root, text="Dark Carnival Auto", font=("Segoe UI Semibold", 18),
@@ -973,6 +995,34 @@ def launch_gui():
     tk.Label(root, text="\u0414\u043b\u044f \u043c\u043e\u043d\u0438\u0442\u043e\u0440\u043e\u0432 \u0441 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0438\u0435\u043c \u043d\u0438\u0436\u0435 1920x1080: \u0432\u044b\u0431\u0438\u0440\u0430\u0435\u0442 \u0433\u0435\u0440\u043e\u0435\u0432 \u043f\u043e \u0441\u043f\u0438\u0441\u043a\u0443 \u043f\u043e \u043a\u0440\u0443\u0433\u0443, \u0431\u0435\u0437 \u0447\u0442\u0435\u043d\u0438\u044f \u0431\u0438\u043b\u0435\u0442\u043e\u0432.", wraplength=420, justify="center",
              font=("Segoe UI", 8), fg=SUB, bg=BG).pack(pady=(0, 4), padx=18)
 
+    tk.Label(root, text="\u0420\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u044d\u043a\u0440\u0430\u043d\u0430 (\u0432\u044b\u0431\u0435\u0440\u0438 \u0441\u0432\u043e\u0451):", font=("Segoe UI", 9), fg=SUB, bg=BG).pack(pady=(10, 0))
+    res_var = tk.StringVar(value="1920x1080")
+    _res_opts = ["1920x1080", "1600x900", "1536x864", "1440x900", "1366x768", "1280x720", "1920x1200", "2560x1440"]
+    res_menu = tk.OptionMenu(root, res_var, *_res_opts)
+    res_menu.config(font=("Segoe UI", 10), fg=TXT, bg="#2a2e40", activebackground=GREEN_A,
+                    activeforeground="white", relief="flat", highlightthickness=0, bd=0,
+                    width=12, cursor="hand2")
+    res_menu["menu"].config(bg="#2a2e40", fg=TXT, activebackground=GREEN, activeforeground="white")
+    res_menu.pack(pady=(2, 6))
+
+    def _apply_res_ui(*_):
+        # resolutions below 1920 wide can't read the ticket digits -> force Simple mode
+        # ON and lock it; at 1920+ the checkbox is free again.
+        try:
+            w = int(res_var.get().lower().split("x")[0])
+        except Exception:
+            w = 1920
+        if w < 1920:
+            simple_var.set(True)
+            chk.config(state="disabled")
+        else:
+            chk.config(state="normal")
+    try:
+        res_var.trace_add("write", _apply_res_ui)
+    except Exception:
+        res_var.trace("w", _apply_res_ui)
+    _apply_res_ui()
+
     state = dict(thread=None)
 
     def set_status(msg):
@@ -984,7 +1034,8 @@ def launch_gui():
     def reset_btn():
         btn.config(text="\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c", bg=GREEN, activebackground=GREEN_A)
         try:
-            chk.config(state="normal")
+            res_menu.config(state="normal")
+            _apply_res_ui()   # re-enable the Simple checkbox only if resolution is 1920+
         except Exception:
             pass
         state["thread"] = None
@@ -1009,8 +1060,10 @@ def launch_gui():
         if state["thread"] is None:
             STOP.clear()
             btn.config(text="\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c", bg=RED, activebackground=RED_A)
+            apply_resolution(res_var.get())
             try:
                 chk.config(state="disabled")
+                res_menu.config(state="disabled")
             except Exception:
                 pass
             t = threading.Thread(target=worker, daemon=True)
